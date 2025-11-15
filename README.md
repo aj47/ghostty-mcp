@@ -1,223 +1,99 @@
-# Ghostty MCP Server
+# ghostty-mcp
 
-A Model Context Protocol (MCP) server that enables AI assistants to interact with [Ghostty](https://ghostty.org/) terminal emulator. This allows AI models to create sessions, send commands, and read terminal output programmatically.
+An experimental [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that lets MCP clients interact with Ghostty terminals on macOS.
+
+> **Status:** early prototype. It currently manages sessions it creates itself and targets the *frontmost* Ghostty window for send/read operations.
 
 ## Features
 
-- **List Sessions**: View all active Ghostty tabs and windows
-- **Create Sessions**: Open new tabs or windows, optionally with a command
-- **Send Keys**: Send text and commands to specific sessions
-- **Read Output**: Read terminal output with chunking support for large outputs
+Tools exposed to MCP clients:
 
-## Platform Support
+- `list_sessions` – list Ghostty sessions created by this MCP server.
+- `create_session` – create a new Ghostty window/tab.
+- `send_keys` – send text/keys into a session.
+- `read_session_output` – read a slice of output from a session (chunked by lines).
 
-Currently supports **macOS only** using AppleScript to control Ghostty.
+Implementation notes:
 
-> **Note**: Linux support could be added in the future using D-Bus when Ghostty implements a D-Bus interface. See [Ghostty Discussion #2353](https://github.com/ghostty-org/ghostty/discussions/2353) for API development progress.
+- **Platform:** macOS only (uses `open` and `osascript`).
+- **Sessions:** tracked in-memory by the server. There is no discovery of arbitrary pre-existing Ghostty windows yet.
+- **Target window:** `send_keys` and `read_session_output` currently operate on the *frontmost* Ghostty window via macOS accessibility.
 
 ## Installation
 
-### Prerequisites
-
-- Node.js >= 18
-- Ghostty terminal emulator installed on macOS
-- macOS with AppleScript support
-
-### Install via npm
-
 ```bash
-npm install -g ghostty-mcp
-```
-
-### Build from source
-
-```bash
-git clone <repository-url>
-cd ghostty-mcp
 npm install
 npm run build
 ```
 
-## Usage with Claude Desktop
+## Running the MCP server
 
-Add to your Claude Desktop configuration file:
-
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "ghostty": {
-      "command": "npx",
-      "args": ["-y", "ghostty-mcp"]
-    }
-  }
-}
-```
-
-Or if installed globally:
-
-```json
-{
-  "mcpServers": {
-    "ghostty": {
-      "command": "ghostty-mcp"
-    }
-  }
-}
-```
-
-## Available Tools
-
-### 1. list_sessions
-
-Lists all active Ghostty sessions (tabs and windows).
-
-**Parameters**: None
-
-**Returns**:
-```json
-[
-  {
-    "id": "window-1-tab-1",
-    "name": "Terminal",
-    "index": 1
-  }
-]
-```
-
-### 2. create_session
-
-Creates a new Ghostty session.
-
-**Parameters**:
-- `type` (optional): `"tab"` or `"window"` (default: `"tab"`)
-- `command` (optional): Command to execute in the new session
-
-**Example**:
-```json
-{
-  "type": "tab",
-  "command": "cd ~/projects && ls -la"
-}
-```
-
-**Returns**:
-```json
-{
-  "success": true,
-  "session": {
-    "id": "window-1-tab-2",
-    "name": "New Tab",
-    "index": 2
-  },
-  "message": "Created new tab: New Tab"
-}
-```
-
-### 3. send_keys
-
-Sends text or commands to a specific session.
-
-**Parameters**:
-- `text` (required): Text to send to the session
-- `session_id` (optional): Target session ID (uses active session if not provided)
-- `press_enter` (optional): Whether to press Enter after sending text (default: `false`)
-
-**Example**:
-```json
-{
-  "session_id": "window-1-tab-1",
-  "text": "echo 'Hello, World!'",
-  "press_enter": true
-}
-```
-
-**Returns**:
-```json
-{
-  "success": true,
-  "message": "Sent text to session window-1-tab-1"
-}
-```
-
-### 4. read_from_session
-
-Reads output from a Ghostty session with chunking support.
-
-**Parameters**:
-- `session_id` (optional): Target session ID (uses active session if not provided)
-- `lines` (optional): Number of lines to read (default: `100`)
-- `offset` (optional): Number of lines to skip from the end for pagination (default: `0`)
-
-**Example**:
-```json
-{
-  "session_id": "window-1-tab-1",
-  "lines": 50,
-  "offset": 0
-}
-```
-
-**Returns**:
-```json
-{
-  "session_id": "window-1-tab-1",
-  "lines": ["line1", "line2", "..."],
-  "total_lines": 150,
-  "lines_returned": 50,
-  "offset": 0
-}
-```
-
-## Development
-
-### Build
+After building, the CLI entrypoint is `ghostty-mcp`:
 
 ```bash
-npm run build
+npx ghostty-mcp
 ```
 
-### Watch mode
+The server speaks MCP over stdio, so you normally do **not** run it directly. Instead, configure your MCP-aware client to spawn it.
 
-```bash
-npm run watch
-```
+### Example: Claude Desktop (local dev)
 
-### Debugging
+Configure a custom MCP server with something like:
 
-Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) for debugging:
+- **Command:** `npx`
+- **Args:** `[-y, ghostty-mcp]`
 
-```bash
-npx @modelcontextprotocol/inspector node dist/index.js
-```
+Then enable the server in Claude, and the `list_sessions`, `create_session`, `send_keys`, and `read_session_output` tools should appear.
 
-## Limitations
+## Tool semantics
 
-1. **macOS Only**: Currently only supports macOS via AppleScript
-2. **Ghostty AppleScript Support**: Requires Ghostty to support AppleScript commands
-3. **Session IDs**: Session IDs are based on window/tab indices and may change if tabs are closed/reordered
+### `list_sessions`
 
-## Future Enhancements
+- **Input:** none
+- **Output:**
+  - `sessions: { id, title, createdAt, note? }[]`
 
-- [ ] Linux support via D-Bus (when Ghostty implements it)
-- [ ] Windows support (when Ghostty provides a control API)
-- [ ] Persistent session IDs
-- [ ] Support for split panes
-- [ ] Terminal output streaming
-- [ ] Better error handling for edge cases
+Only sessions created by this `ghostty-mcp` process are returned.
 
-## References
+### `create_session`
 
-- [Ghostty Documentation](https://ghostty.org/docs)
-- [Ghostty Scripting API Discussion](https://github.com/ghostty-org/ghostty/discussions/2353)
-- [MCP Discussion for Ghostty](https://github.com/ghostty-org/ghostty/discussions/6683)
-- [Model Context Protocol](https://modelcontextprotocol.io/)
+- **Input:**
+  - `title?: string` – optional window title; defaults to a generated name.
+  - `cwd?: string` – optional working directory.
+  - `command?: string` – optional command to execute instead of the default shell.
+- **Behavior:**
+  - Spawns a new Ghostty window using `open -na Ghostty.app --args ...`.
+  - Tracks the session in memory and returns its metadata.
 
-## License
+### `send_keys`
 
-MIT
+- **Input:**
+  - `sessionId: string`
+  - `text: string`
+  - `raw?: boolean` – if omitted/false, a trailing `\n` is appended.
+- **Behavior:**
+  - Uses `osascript` to send keystrokes to the *active* Ghostty window.
+  - Today, it does **not** guarantee targeting a specific window beyond what macOS focus provides.
 
-## Contributing
+### `read_session_output`
 
-Contributions are welcome! Please feel free to submit issues or pull requests.
+- **Input:**
+  - `sessionId: string`
+  - `startLine?: number` – 1-based line index.
+  - `maxLines?: number` – maximum lines to return (default ~200).
+- **Behavior:**
+  - Uses macOS accessibility (`System Events` → `Ghostty` process) to read text from the frontmost Ghostty window.
+  - Splits into lines and returns a slice.
+- **Output:**
+  - `sessionId: string`
+  - `totalLines: number`
+  - `startLine: number`
+  - `lines: string[]`
+
+## Limitations / TODOs
+
+- Properly bind each `sessionId` to a specific Ghostty window/tab rather than assuming frontmost.
+- Add optional integration with Ghostty Shortcuts actions instead of raw `open`/`osascript`.
+- Improve error reporting when Ghostty is not running or accessibility permissions are missing.
+- Add automated tests (currently only TypeScript build is checked).
+

@@ -1,32 +1,36 @@
 {
   "name": "ghostty-mcp",
   "version": "1.0.0",
-  "description": "Model Context Protocol server for Ghostty terminal emulator",
   "main": "dist/index.js",
+  "type": "module",
   "bin": {
-    "ghostty-mcp": "./dist/index.js"
+    "ghostty-mcp": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
-    "watch": "tsc --watch",
-    "prepare": "npm run build"
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "test": "npm run build"
   },
-  "keywords": [
-    "mcp",
-    "ghostty",
-    "terminal",
-    "model-context-protocol"
-  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aj47/ghostty-mcp.git"
+  },
+  "keywords": [],
   "author": "",
-  "license": "MIT",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/aj47/ghostty-mcp/issues"
+  },
+  "homepage": "https://github.com/aj47/ghostty-mcp#readme",
+  "description": "",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4"
+    "@modelcontextprotocol/sdk": "^1.22.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "typescript": "^5.7.2"
-  },
-  "engines": {
-    "node": ">=18"
+    "@types/node": "^24.10.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   }
 }

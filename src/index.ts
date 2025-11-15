@@ -1,271 +1,167 @@
-#!/usr/bin/env node
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  Tool,
-} from '@modelcontextprotocol/sdk/types.js';
-import { GhosttyController } from './ghostty.js';
+import { GhosttyManager } from "./lib/ghostty.js";
 
-/**
- * Ghostty MCP Server
- * Provides tools for interacting with Ghostty terminal emulator
- */
-class GhosttyMCPServer {
-  private server: Server;
-  private ghostty: GhosttyController;
+async function main() {
+  const server = new McpServer({
+    name: "ghostty-mcp",
+    version: "0.1.0",
+  });
 
-  constructor() {
-    this.ghostty = new GhosttyController();
-    this.server = new Server(
-      {
-        name: 'ghostty-mcp',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
+  const ghostty = new GhosttyManager();
 
-    this.setupHandlers();
-  }
-
-  private setupHandlers(): void {
-    // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const tools: Tool[] = [
-        {
-          name: 'list_sessions',
-          description: 'List all active Ghostty sessions (tabs and windows)',
-          inputSchema: {
-            type: 'object',
-            properties: {},
+  // list_sessions
+  server.registerTool(
+    "list_sessions",
+    {
+      title: "List Ghostty sessions",
+      description: "List Ghostty sessions managed by this MCP server.",
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        sessions: z.array(
+          z.object({
+            id: z.string(),
+            title: z.string(),
+            createdAt: z.string(),
+            note: z.string().optional(),
+          }),
+        ),
+      }),
+    },
+    async () => {
+      const sessions = ghostty.listSessions();
+      const output = { sessions };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(output, null, 2),
           },
-        },
-        {
-          name: 'create_session',
-          description: 'Create a new Ghostty session (tab or window)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              type: {
-                type: 'string',
-                enum: ['tab', 'window'],
-                description: 'Type of session to create (tab or window)',
-                default: 'tab',
-              },
-              command: {
-                type: 'string',
-                description: 'Optional command to execute in the new session',
-              },
-            },
+        ],
+        structuredContent: output,
+      };
+    },
+  );
+
+  // create_session
+  server.registerTool(
+    "create_session",
+    {
+      title: "Create Ghostty session",
+      description: "Create a new Ghostty session (window/tab).",
+      inputSchema: z.object({
+        title: z.string().optional(),
+        cwd: z.string().optional(),
+        command: z.string().optional(),
+      }),
+      outputSchema: z.object({
+        session: z.object({
+          id: z.string(),
+          title: z.string(),
+          createdAt: z.string(),
+          note: z.string().optional(),
+        }),
+      }),
+    },
+    async ({ title, cwd, command }) => {
+      const session = await ghostty.createSession({ title, cwd, command });
+      const output = { session };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(output, null, 2),
           },
-        },
-        {
-          name: 'send_keys',
-          description: 'Send text/keys to a specific Ghostty session',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              session_id: {
-                type: 'string',
-                description: 'ID of the target session (from list_sessions)',
-              },
-              text: {
-                type: 'string',
-                description: 'Text to send to the session',
-              },
-              press_enter: {
-                type: 'boolean',
-                description: 'Whether to press Enter after sending the text',
-                default: false,
-              },
-            },
-            required: ['text'],
+        ],
+        structuredContent: output,
+      };
+    },
+  );
+
+  // send_keys
+  server.registerTool(
+    "send_keys",
+    {
+      title: "Send keys to Ghostty session",
+      description: "Send text/keys to a Ghostty session.",
+      inputSchema: z.object({
+        sessionId: z.string(),
+        text: z.string(),
+        raw: z.boolean().optional().describe("If false (default), append a newline to the text."),
+      }),
+      outputSchema: z.object({ ok: z.boolean() }),
+    },
+    async ({ sessionId, text, raw }) => {
+      await ghostty.sendKeys(sessionId, text, { raw });
+      const output = { ok: true };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(output),
           },
-        },
-        {
-          name: 'read_from_session',
-          description: 'Read output from a Ghostty session with chunking support',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              session_id: {
-                type: 'string',
-                description: 'ID of the target session (from list_sessions). If not provided, reads from active session.',
-              },
-              lines: {
-                type: 'number',
-                description: 'Number of lines to read (default: 100)',
-                default: 100,
-              },
-              offset: {
-                type: 'number',
-                description: 'Number of lines to skip from the end (for pagination, default: 0)',
-                default: 0,
-              },
-            },
+        ],
+        structuredContent: output,
+      };
+    },
+  );
+
+  // read_session_output
+  server.registerTool(
+    "read_session_output",
+    {
+      title: "Read output from Ghostty session",
+      description:
+        "Read a slice of output from a Ghostty session using macOS accessibility.",
+      inputSchema: z.object({
+        sessionId: z.string(),
+        startLine: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("1-based line to start reading from."),
+        maxLines: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Maximum number of lines to return."),
+      }),
+      outputSchema: z.object({
+        sessionId: z.string(),
+        totalLines: z.number().int().nonnegative(),
+        startLine: z.number().int().positive(),
+        lines: z.array(z.string()),
+      }),
+    },
+    async ({ sessionId, startLine, maxLines }) => {
+      const result = await ghostty.readSessionOutput(sessionId, {
+        startLine,
+        maxLines,
+      });
+      const output = { sessionId, ...result };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(output, null, 2),
           },
-        },
-      ];
+        ],
+        structuredContent: output,
+      };
+    },
+  );
 
-      return { tools };
-    });
-
-    // Handle tool calls
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      try {
-        switch (name) {
-          case 'list_sessions': {
-            const sessions = await this.ghostty.listSessions();
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(sessions, null, 2),
-                },
-              ],
-            };
-          }
-
-          case 'create_session': {
-            const type = (args?.type as 'tab' | 'window') || 'tab';
-            const command = args?.command as string | undefined;
-            const session = await this.ghostty.createSession(type, command);
-
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(
-                    {
-                      success: true,
-                      session,
-                      message: `Created new ${type}: ${session.name}`,
-                    },
-                    null,
-                    2
-                  ),
-                },
-              ],
-            };
-          }
-
-          case 'send_keys': {
-            // Get session_id or use active session
-            let sessionId = args?.session_id as string | undefined;
-
-            if (!sessionId) {
-              const activeSession = await this.ghostty.getActiveSession();
-              if (!activeSession) {
-                throw new Error('No active session found. Please specify session_id.');
-              }
-              sessionId = activeSession.id;
-            }
-
-            const text = args?.text as string;
-            const pressEnter = (args?.press_enter as boolean) || false;
-
-            if (!text) {
-              throw new Error('text parameter is required');
-            }
-
-            await this.ghostty.sendKeys(sessionId, text, pressEnter);
-
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(
-                    {
-                      success: true,
-                      message: `Sent text to session ${sessionId}`,
-                    },
-                    null,
-                    2
-                  ),
-                },
-              ],
-            };
-          }
-
-          case 'read_from_session': {
-            // Get session_id or use active session
-            let sessionId = args?.session_id as string | undefined;
-
-            if (!sessionId) {
-              const activeSession = await this.ghostty.getActiveSession();
-              if (!activeSession) {
-                throw new Error('No active session found. Please specify session_id.');
-              }
-              sessionId = activeSession.id;
-            }
-
-            const lines = (args?.lines as number) || 100;
-            const offset = (args?.offset as number) || 0;
-
-            const output = await this.ghostty.readFromSession(sessionId, lines, offset);
-
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(
-                    {
-                      session_id: sessionId,
-                      lines: output.lines,
-                      total_lines: output.totalLines,
-                      lines_returned: output.lines.length,
-                      offset,
-                    },
-                    null,
-                    2
-                  ),
-                },
-              ],
-            };
-          }
-
-          default:
-            throw new Error(`Unknown tool: ${name}`);
-        }
-      } catch (error: any) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  success: false,
-                  error: error.message,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-          isError: true,
-        };
-      }
-    });
-  }
-
-  async start(): Promise<void> {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    console.error('Ghostty MCP server running on stdio');
-  }
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 }
 
-// Start the server
-const server = new GhosttyMCPServer();
-server.start().catch((error) => {
-  console.error('Failed to start server:', error);
+main().catch((err) => {
+  // eslint-disable-next-line no-console
+  console.error("ghostty-mcp server failed:", err);
   process.exit(1);
 });
+
